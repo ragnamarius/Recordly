@@ -1,3 +1,5 @@
+import type { WebcamShape } from "../../video-editor/types";
+import { getWebcamClipPath } from "../../video-editor/webcamOverlay";
 import {
 	Eye,
 	EyeSlash as EyeOff,
@@ -21,6 +23,8 @@ export function WebcamPopover({
 	showFloatingWebcamPreview,
 	onToggleFloatingPreview,
 	showWebcamControls,
+	roundness,
+	shape,
 	setWebcamPreviewNode,
 	videoDevices,
 	webcamDeviceId,
@@ -35,6 +39,8 @@ export function WebcamPopover({
 	showFloatingWebcamPreview: boolean;
 	onToggleFloatingPreview: () => void;
 	showWebcamControls: boolean;
+	roundness: number;
+	shape?: WebcamShape;
 	setWebcamPreviewNode: (node: HTMLVideoElement | null) => void;
 	videoDevices: DeviceOption[];
 	webcamDeviceId?: string;
@@ -60,6 +66,7 @@ export function WebcamPopover({
 			}}
 			trigger={trigger}
 			align="center"
+			label={t("recording.cameraSettings", "Camera settings")}
 		>
 			<div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--launch-label)]">
 				{t("recording.webcam")}
@@ -97,13 +104,16 @@ export function WebcamPopover({
 			)}
 			{showWebcamControls && (
 				<div className="flex justify-center px-3 py-2">
-					<div className="h-24 w-24 overflow-hidden rounded-2xl bg-[var(--launch-hover)] ring-1 ring-[var(--launch-border-strong)]">
+					<div className="relative h-24 w-24">
 						<video
 							ref={setWebcamPreviewNode}
-							className="h-full w-full object-cover"
+							className="h-full w-full object-cover bg-[var(--launch-hover)]"
 							muted
 							playsInline
-							style={{ transform: "scaleX(-1)" }}
+							style={{
+								transform: "scaleX(-1)",
+								clipPath: getWebcamClipPath(roundness, 96, 96, shape),
+							}}
 						/>
 					</div>
 				</div>

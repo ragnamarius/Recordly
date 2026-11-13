@@ -1,3 +1,5 @@
+import { normalizeCustomGradients } from "./customGradients";
+import { DESKTOP_WALLPAPER } from "@/lib/desktopWallpaper";
 import { normalizeExportPreferences, type ExportPreferences } from "./exportPreferences";
 import { loadAppSetting, saveAppSetting } from "../../lib/appSettings";
 import {
@@ -44,6 +46,7 @@ type PersistedEditorControls = Pick<
 	| "cursorClickBounce"
 	| "cursorClickBounceDuration"
 	| "cursorSway"
+	| "cursorIdleHide"
 	| "borderRadius"
 	| "padding"
 	| "webcam"
@@ -54,7 +57,10 @@ type PartialEditorControls = Partial<PersistedEditorControls>;
 
 type PresetAutoCaptionSettings = ProjectEditorState["autoCaptionSettings"];
 type PresetCropRegion = ProjectEditorState["cropRegion"];
-type PresetWebcamSettings = Omit<ProjectEditorState["webcam"], "sourcePath" | "visibleRanges">;
+type PresetWebcamSettings = Omit<
+	ProjectEditorState["webcam"],
+	"sourcePath" | "visibleRanges" | "loop"
+>;
 
 export interface EditorPresetSnapshot extends Omit<PersistedEditorControls, "webcam"> {
 	borderRadiusUnit: "percent";
@@ -72,11 +78,13 @@ export interface EditorPreset {
 }
 
 export interface EditorPreferences extends PersistedEditorControls, ExportPreferences {
+	autoApplyFreshRecordingAutoZooms: boolean;
 	borderRadiusUnit: "percent";
 	customAspectWidth: string;
 	customAspectHeight: string;
 	customWallpapers: string[];
-	autoApplyFreshRecordingAutoZooms: boolean;
+	customGradients: string[];
+	customColors: string[];
 	whisperExecutablePath: string | null;
 	whisperModelPath: string | null;
 }
@@ -87,7 +95,8 @@ export const EDITOR_PRESETS_STORAGE_KEY = "recordly.editor.presets";
 const DEFAULT_EDITOR_CONTROLS = normalizeProjectEditor({});
 
 export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
-	wallpaper: DEFAULT_EDITOR_CONTROLS.wallpaper,
+	autoApplyFreshRecordingAutoZooms: true,
+	wallpaper: DESKTOP_WALLPAPER,
 	shadowIntensity: DEFAULT_EDITOR_CONTROLS.shadowIntensity,
 	backgroundBlur: DEFAULT_EDITOR_CONTROLS.backgroundBlur,
 	zoomMotionBlur: DEFAULT_EDITOR_CONTROLS.zoomMotionBlur,
@@ -121,6 +130,7 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
 	cursorClickBounce: DEFAULT_EDITOR_CONTROLS.cursorClickBounce,
 	cursorClickBounceDuration: DEFAULT_EDITOR_CONTROLS.cursorClickBounceDuration,
 	cursorSway: DEFAULT_EDITOR_CONTROLS.cursorSway,
+	cursorIdleHide: DEFAULT_EDITOR_CONTROLS.cursorIdleHide,
 	borderRadius: DEFAULT_EDITOR_CONTROLS.borderRadius,
 	borderRadiusUnit: "percent",
 	padding: DEFAULT_EDITOR_CONTROLS.padding,
@@ -130,14 +140,11 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
 	customAspectWidth: "16",
 	customAspectHeight: "9",
 	customWallpapers: [],
-	autoApplyFreshRecordingAutoZooms: true,
+	customGradients: [],
+	customColors: [],
 	whisperExecutablePath: null,
 	whisperModelPath: null,
 };
-
-function normalizeBoolean(value: unknown, fallback: boolean): boolean {
-	return typeof value === "boolean" ? value : fallback;
-}
 
 function normalizePositiveIntegerString(value: unknown, fallback: string): string {
 	if (typeof value !== "string" || value.trim().length === 0) {
@@ -196,6 +203,7 @@ function normalizeEditorPresetSnapshot(candidate: unknown): EditorPresetSnapshot
 	const {
 		sourcePath: _sourcePath,
 		visibleRanges: _visibleRanges,
+		loop: _loop,
 		...webcam
 	} = normalizedControls.webcam;
 
@@ -271,7 +279,10 @@ function normalizeEditorControls(
 ): PersistedEditorControls {
 	const sanitizedRaw = stripPersistedDevMotionBlurSettings(raw);
 	const candidate: PartialEditorControls = {
-		wallpaper: sanitizedRaw.wallpaper ?? fallback.wallpaper,
+		wallpaper:
+			typeof sanitizedRaw.wallpaper === "string"
+				? sanitizedRaw.wallpaper
+				: fallback.wallpaper,
 		shadowIntensity: sanitizedRaw.shadowIntensity ?? fallback.shadowIntensity,
 		backgroundBlur: sanitizedRaw.backgroundBlur ?? fallback.backgroundBlur,
 		zoomMotionBlur: sanitizedRaw.zoomMotionBlur ?? fallback.zoomMotionBlur,
@@ -318,9 +329,13 @@ function normalizeEditorControls(
 		cursorClickBounceDuration:
 			sanitizedRaw.cursorClickBounceDuration ?? fallback.cursorClickBounceDuration,
 		cursorSway: sanitizedRaw.cursorSway ?? fallback.cursorSway,
+		cursorIdleHide: sanitizedRaw.cursorIdleHide ?? fallback.cursorIdleHide,
 		borderRadius: sanitizedRaw.borderRadius ?? fallback.borderRadius,
 		padding: sanitizedRaw.padding ?? fallback.padding,
-		webcam: sanitizedRaw.webcam ?? fallback.webcam,
+		webcam: {
+			...(sanitizedRaw.webcam ?? fallback.webcam),
+			shape: sanitizedRaw.webcam?.shape ?? fallback.webcam.shape,
+		},
 		aspectRatio: sanitizedRaw.aspectRatio ?? fallback.aspectRatio,
 	};
 
@@ -361,6 +376,7 @@ function normalizeEditorControls(
 		cursorClickBounce: normalized.cursorClickBounce,
 		cursorClickBounceDuration: normalized.cursorClickBounceDuration,
 		cursorSway: normalized.cursorSway,
+		cursorIdleHide: normalized.cursorIdleHide,
 		borderRadius: normalized.borderRadius,
 		padding: normalized.padding,
 		webcam: normalized.webcam,
@@ -401,10 +417,12 @@ export function normalizeEditorPreferences(
 			raw.customWallpapers,
 			fallback.customWallpapers,
 		),
-		autoApplyFreshRecordingAutoZooms: normalizeBoolean(
-			raw.autoApplyFreshRecordingAutoZooms,
-			fallback.autoApplyFreshRecordingAutoZooms,
-		),
+		customGradients: normalizeCustomGradients(raw.customGradients ?? fallback.customGradients),
+		customColors: normalizeCustomColors(raw.customColors ?? fallback.customColors),
+		autoApplyFreshRecordingAutoZooms:
+			typeof raw.autoApplyFreshRecordingAutoZooms === "boolean"
+				? raw.autoApplyFreshRecordingAutoZooms
+				: fallback.autoApplyFreshRecordingAutoZooms,
 		whisperExecutablePath:
 			normalizeNullablePath(raw.whisperExecutablePath) ?? fallback.whisperExecutablePath,
 		whisperModelPath: normalizeNullablePath(raw.whisperModelPath) ?? fallback.whisperModelPath,
@@ -429,10 +447,21 @@ export function loadEditorPreferences(): EditorPreferences {
 	}
 }
 
-export function saveEditorPreferences(preferences: Partial<EditorPreferences>): void {
+export type EditorPreferencesPatch = Omit<Partial<EditorPreferences>, "webcam"> & {
+	webcam?: Partial<EditorPreferences["webcam"]>;
+};
+
+export function saveEditorPreferences(preferences: EditorPreferencesPatch): void {
 	try {
 		const current = loadEditorPreferences();
-		const merged = normalizeEditorPreferences({ ...current, ...preferences }, current);
+		const merged = normalizeEditorPreferences(
+			{
+				...current,
+				...preferences,
+				webcam: { ...current.webcam, ...preferences.webcam },
+			},
+			current,
+		);
 		const persisted = stripPersistedDevMotionBlurSettings(merged);
 		saveAppSetting(EDITOR_PREFERENCES_STORAGE_KEY, persisted);
 		saveLocalStorageJson(EDITOR_PREFERENCES_STORAGE_KEY, persisted);
@@ -485,4 +514,18 @@ export function saveEditorPresets(presets: EditorPreset[]): boolean {
 		// Ignore storage failures so editor controls still work.
 		return false;
 	}
+}
+
+function normalizeCustomColors(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	return [
+		...new Set(
+			value
+				.filter(
+					(color): color is string =>
+						typeof color === "string" && /^#[\da-f]{6}$/i.test(color),
+				)
+				.map((color) => color.toLowerCase()),
+		),
+	].slice(0, 50);
 }
