@@ -1,5 +1,3 @@
-import { nativeT } from "./nativeI18n";
-import { recordingEditorLoading } from "./recordingEditorLoading";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -29,7 +27,9 @@ import {
 	nativeCaptureProcess,
 } from "./ipc/state";
 import type { CaptureArea } from "./ipc/types";
+import { nativeT } from "./nativeI18n";
 import { startOnboardingIntro } from "./onboardingIntro";
+import { recordingEditorLoading } from "./recordingEditorLoading";
 import { outsideRecordingRects } from "./recordingFocus";
 import { getPackagedRendererBaseUrl } from "./rendererServer";
 
@@ -70,6 +70,7 @@ let areaRecordingBorderWindow: BrowserWindow | null = null;
 let recordingFocusWindows: BrowserWindow[] = [];
 let updateToastWindow: BrowserWindow | null = null;
 let onboardingWindow: BrowserWindow | null = null;
+let startupOnboarding: { window: BrowserWindow; waiting: boolean } | undefined;
 let onboardingIntroWindow: BrowserWindow | null = null;
 let onboardingIntroReplayWindow: BrowserWindow | null = null;
 let hudWasVisibleBeforeUpdateToast = false;
@@ -673,6 +674,11 @@ export function createHudOverlayWindow(): BrowserWindow {
 			applyHudOverlayCaptureProtectionToWindow(win, hudOverlayHiddenFromCapture);
 		}
 	});
+	win.on("restore", () => {
+		if (!win.isDestroyed()) {
+			win.webContents.send("hud-overlay-restored");
+		}
+	});
 
 	if (isHudOverlayMousePassthroughSupported()) {
 		if (hudOverlayRecordingActive) {
@@ -852,10 +858,10 @@ export function setHudOverlayRecordingActive(recording: boolean): void {
 	hudOverlayFallbackExpanded = false;
 	applyHudOverlayBounds();
 	reassertHudOverlayCaptureProtection();
-	// Start in passthrough mode. Forwarded pointer movement lets the renderer
-	// make the visible HUD controls interactive when the pointer reaches them,
-	// while transparent parts never block the recorded application.
-	setHudOverlayMousePassthrough(true);
+	// Keep whatever hover state the renderer last reported. Forcing passthrough
+	// here made the HUD click-through right after the user pressed record, so the
+	// stop button swallowed clicks until the pointer moved again.
+	setHudOverlayMousePassthrough(hudOverlayIgnoringMouse);
 }
 
 export function createUpdateToastWindow(): BrowserWindow {
@@ -1203,9 +1209,21 @@ function bringOnboardingWindowForward(win: BrowserWindow): void {
 export function focusOnboardingWindow(): void {
 	const win = getOnboardingWindow();
 	if (!win) return;
+	if (startupOnboarding?.window === win && startupOnboarding.waiting) return;
 	if (win.isMinimized()) win.restore();
 	if (onboardingIntroWindow && !onboardingIntroWindow.isDestroyed() && !win.isVisible()) return;
 	bringOnboardingWindowForward(win);
+}
+
+export function getStartupOnboardingWindow(): BrowserWindow | null {
+	return startupOnboarding?.window ?? null;
+}
+
+export function revealStartupOnboardingWindow(): void {
+	if (startupOnboarding?.waiting) {
+		startupOnboarding.waiting = false;
+		focusOnboardingWindow();
+	}
 }
 
 export function getOnboardingWindow(): BrowserWindow | null {
@@ -1292,9 +1310,11 @@ export function replayOnboardingIntro(owner: BrowserWindow): boolean {
 export function showOnboardingWindow(options?: {
 	preview?: boolean;
 	intro?: boolean;
+	returning?: boolean;
 }): BrowserWindow {
 	const query = {
 		windowType: "onboarding",
+		...(options?.returning ? { returning: "1" } : {}),
 		...(!app.isPackaged && typeof options?.preview === "boolean"
 			? { onboardingPreview: options.preview ? "1" : "0" }
 			: {}),
@@ -1310,7 +1330,10 @@ export function showOnboardingWindow(options?: {
 	};
 	if (onboardingWindow && !onboardingWindow.isDestroyed()) {
 		hideOtherOnboardingWindows(onboardingWindow);
-		if (!app.isPackaged && typeof options?.preview === "boolean") load(onboardingWindow, query);
+		if (!app.isPackaged && typeof options?.preview === "boolean") {
+			const intro = onboardingIntroWindow && !onboardingIntroWindow.isDestroyed();
+			load(onboardingWindow, intro ? { ...query, welcomeSoundtrack: "intro" } : query);
+		}
 		onboardingWindow.setBounds(getOnboardingWindowBounds());
 		focusOnboardingWindow();
 		return onboardingWindow;
@@ -1341,9 +1364,11 @@ export function showOnboardingWindow(options?: {
 	registerDesktopPresenceWindow(win);
 	if (process.platform !== "darwin") win.setMenu(null);
 	onboardingWindow = win;
+	if (options?.returning) startupOnboarding = { window: win, waiting: true };
 	enforceOnboardingWindowExclusivity(win);
 	win.once("closed", () => {
 		if (onboardingWindow === win) onboardingWindow = null;
+		if (startupOnboarding?.window === win) startupOnboarding = undefined;
 	});
 	hideOtherOnboardingWindows(win);
 	const show = () => {
@@ -1364,10 +1389,10 @@ export function showOnboardingWindow(options?: {
 		intro.once("closed", () => {
 			if (onboardingIntroWindow === intro) onboardingIntroWindow = null;
 		});
-	} else {
+	} else if (!options?.returning) {
 		win.once("ready-to-show", show);
 	}
-	load(win, query);
+	load(win, playIntro ? { ...query, welcomeSoundtrack: "intro" } : query);
 	return win;
 }
 

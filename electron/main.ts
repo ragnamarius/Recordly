@@ -1,4 +1,3 @@
-import { createReleaseVersionCatalog } from "./releaseVersions";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,27 +15,24 @@ import {
 	systemPreferences,
 	Tray,
 } from "electron";
-import { nativeT, setNativeLocale } from "./nativeI18n";
-import {
-	captureEditorMenuTarget,
-	createEditorCommandMenus,
-	withHiddenDockEditorMenus,
-	type ProjectMenuAction,
-} from "./editorCommandMenu";
-import { validateAppLocaleRequest } from "./localeIpc";
-import { readAppSetting, writeAppSetting } from "./appSettingsStore";
-import { refreshDesktopPresenceLocale } from "./desktopPresence";
-import { initializeInstanceSession, RECORDINGS_DIR } from "./appPaths";
 import { activateFromDesktopIcon } from "./appActivation";
-import { getUpdatePresentation } from "./updatePresentation";
+import { initializeInstanceSession, RECORDINGS_DIR } from "./appPaths";
+import { readAppSetting, writeAppSetting } from "./appSettingsStore";
 import { createAuthCallbackController } from "./authCallback";
 import { showCursor } from "./cursorHider";
 import {
 	desktopPresenceNeedsTray,
 	initializeDesktopPresence,
+	refreshDesktopPresenceLocale,
 	setDesktopPresenceRecording,
 	stopRecordingFromDesktopIcon,
 } from "./desktopPresence";
+import {
+	captureEditorMenuTarget,
+	createEditorCommandMenus,
+	type ProjectMenuAction,
+	withHiddenDockEditorMenus,
+} from "./editorCommandMenu";
 import { getGpuSwitches } from "./gpuSwitches";
 import {
 	cleanupAllExportStreams,
@@ -48,30 +44,35 @@ import {
 import { recordingFocus } from "./ipc/recording/focus";
 import { clearRecordingTrashUndo } from "./ipc/recording/library";
 import { resolveDisplayMediaSource } from "./ipc/register/sourceMapping";
+import { validateAppLocaleRequest } from "./localeIpc";
 import { ensureMediaServer } from "./mediaServer";
+import { nativeT, setNativeLocale } from "./nativeI18n";
 import {
 	hardenWebContentsNavigation,
 	isInternalRendererTarget,
 	shouldHardenWebContentsType,
 } from "./navigationPolicy";
 import { shouldGrantDisplayCapture, shouldGrantMediaPermission } from "./permissionPolicy";
+import { createReleaseVersionCatalog } from "./releaseVersions";
 import { ensurePackagedRendererServer, getPackagedRendererBaseUrl } from "./rendererServer";
 import { createSaveBeforeCloseController } from "./saveBeforeClose";
+import { isTrustedRenderer } from "./trustedRenderer";
+import { getUpdatePresentation } from "./updatePresentation";
 import {
 	checkForAppUpdates,
 	deferUpdateReminder,
 	dismissUpdateToast,
 	downloadAvailableUpdate,
-	getCurrentUpdateToastPayload,
 	getAutomaticUpdateDownloadsEnabled,
+	getCurrentUpdateToastPayload,
 	getExperimentalUpdatesEnabled,
 	getUpdaterLogPath,
 	getUpdateStatusSummary,
 	installDownloadedUpdateNow,
 	previewNativeUpdateDialog,
 	previewUpdateToast,
-	setExperimentalUpdatesEnabled,
 	setAutomaticUpdateDownloadsEnabled,
+	setExperimentalUpdatesEnabled,
 	setupAutoUpdates,
 	showUpdateNotificationOnOpen,
 	skipAvailableUpdateVersion,
@@ -85,11 +86,13 @@ import {
 	focusOnboardingWindow,
 	getHudOverlayWindow,
 	getOnboardingWindow,
+	getStartupOnboardingWindow,
 	getUpdateToastWindow,
 	hideUpdateToastWindow,
 	isHudOverlayMousePassthroughSupported,
-	replayOnboardingIntro,
 	reassertHudOverlayMousePassthrough as reassertHudOverlayMouseState,
+	replayOnboardingIntro,
+	revealStartupOnboardingWindow,
 	setHudOverlayRecordingActive,
 	showOnboardingWindow,
 	showUpdateToastWindow,
@@ -121,6 +124,25 @@ ipcMain.handle("replay-onboarding-intro", (event) => {
 ipcMain.handle("close-onboarding-window", () => {
 	closeOnboardingWindow();
 	return true;
+});
+ipcMain.handle("resolve-startup-onboarding", (event, action: unknown) => {
+	if (getStartupOnboardingWindow()?.webContents !== event.sender || !isTrustedRenderer(event))
+		return false;
+	if (action === "show") {
+		revealStartupOnboardingWindow();
+		return true;
+	}
+	if (action === "continue") {
+		createRecordingControls();
+		closeOnboardingWindow();
+		return true;
+	}
+	if (action === "restart" && app.isPackaged) {
+		app.relaunch({ args: [] });
+		app.quit();
+		return true;
+	}
+	return false;
 });
 
 ignoreBrokenConsolePipe(process.stdout);
@@ -430,21 +452,43 @@ function createWindow() {
 		return;
 	}
 
-	if (app.isPackaged && readAppSetting("recordly.onboarding.v1.seen") !== true) {
-		showOnboardingWindow({ intro: claimFirstRunIntro() });
+	if (app.isPackaged) {
+		if (getOnboardingWindow()) {
+			focusOnboardingWindow();
+			return;
+		}
+		const returning =
+			firstRunIntroStarted ||
+			readAppSetting("recordly.onboarding.v1.seen") === true ||
+			readAppSetting("recordly.onboarding.introStarted") === true ||
+			readAppSetting("recordly.onboarding.permissionsRequested") === true;
+		showOnboardingWindow({ intro: !returning && claimFirstRunIntro(), returning });
 		return;
 	}
 
+	createRecordingControls();
+}
+
+function createRecordingControls() {
+	const existingHud = getHudOverlayWindow();
+	if (existingHud) {
+		mainWindow = existingHud;
+		restoreWindowSafely(existingHud);
+		return;
+	}
 	isCreatingMainWindow = true;
-	const createdHudWindow = createHudOverlayWindow();
-	mainWindow = createdHudWindow;
-	createdHudWindow.once("closed", () => {
-		recordingFocus.stop();
-		if (mainWindow === createdHudWindow) {
-			mainWindow = null;
-		}
-	});
-	isCreatingMainWindow = false;
+	try {
+		const createdHudWindow = createHudOverlayWindow();
+		mainWindow = createdHudWindow;
+		createdHudWindow.once("closed", () => {
+			recordingFocus.stop();
+			if (mainWindow === createdHudWindow) {
+				mainWindow = null;
+			}
+		});
+	} finally {
+		isCreatingMainWindow = false;
+	}
 }
 
 function claimFirstRunIntro() {
@@ -452,13 +496,12 @@ function claimFirstRunIntro() {
 	firstRunIntroStarted = true;
 	const introStartedKey = "recordly.onboarding.introStarted";
 	if (readAppSetting(introStartedKey) === true) return false;
-	const resumingPermissions = readAppSetting("recordly.onboarding.permissionsRequested") === true;
 	try {
 		writeAppSetting(introStartedKey, true);
 	} catch (error) {
 		console.warn("[onboarding] Could not save reveal progress", error);
 	}
-	return !resumingPermissions;
+	return true;
 }
 
 function focusOrCreateMainWindow() {
@@ -1300,7 +1343,10 @@ app.whenReady().then(async () => {
 	]);
 
 	registerIpcHandlers(
-		createEditorWindowWrapper,
+		() => {
+			if (getOnboardingWindow()) focusOnboardingWindow();
+			else createEditorWindowWrapper();
+		},
 		createSourceSelectorWindowWrapper,
 		() => mainWindow,
 		() => sourceSelectorWindow,

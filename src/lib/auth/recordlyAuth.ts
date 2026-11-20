@@ -6,6 +6,7 @@ import {
 	createPendingSignupConsentStore,
 	createSignupConsentRetryStore,
 } from "./pendingSignupConsent";
+import { isSavedSignInLocked } from "./savedSignIn";
 import { marketingEmailMetadata, type SignupConsent, signupConsentMetadata } from "./signupConsent";
 import {
 	SignupConsentScopeChangedError,
@@ -107,9 +108,9 @@ function createAuthStorage() {
 			}
 			try {
 				await bridge.authStorageMigrate(snapshot);
-			} catch {
+			} catch (error) {
 				removeLegacyCopies(local, owned);
-				return null;
+				return isSavedSignInLocked(error) ? bridge : null;
 			}
 			// Main migrates existing credentials once. Remove old copies so
 			// logging out cannot restore a stale browser session.

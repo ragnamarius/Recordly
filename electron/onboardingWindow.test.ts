@@ -165,7 +165,9 @@ it("hides every other app window and loads the dev preview", async () => {
 	}
 	expect(onboarding.isDestroyed()).toBe(false);
 	expect(onboarding.loadURL).toHaveBeenCalledWith(
-		"http://localhost:5173?windowType=onboarding&onboardingPreview=1",
+		process.platform === "darwin" || process.platform === "win32"
+			? "http://localhost:5173?windowType=onboarding&onboardingPreview=1&welcomeSoundtrack=intro"
+			: "http://localhost:5173?windowType=onboarding&onboardingPreview=1",
 	);
 	if (process.platform === "darwin" || process.platform === "win32") {
 		expect(windows.at(-1)?.loadURL).toHaveBeenCalledWith(
@@ -195,12 +197,29 @@ it("does not enable preview in packaged apps", async () => {
 	expect(onboarding.loadURL).toHaveBeenCalledWith("http://localhost:5173?windowType=onboarding");
 });
 
+it("keeps a returning launch hidden until the startup gate has a page to show", async () => {
+	electron.app.isPackaged = true;
+	const { focusOnboardingWindow, revealStartupOnboardingWindow, showOnboardingWindow } =
+		await import("./windows");
+	const onboarding = showOnboardingWindow({ returning: true }) as unknown as FakeWindow;
+	expect(windows).toEqual([onboarding]);
+	expect(onboarding.url).toContain("windowType=onboarding&returning=1");
+	onboarding.emit("ready-to-show");
+	focusOnboardingWindow();
+	expect(onboarding.show).not.toHaveBeenCalled();
+	revealStartupOnboardingWindow();
+	expect(onboarding.show).toHaveBeenCalledOnce();
+	expect(onboarding.focus).toHaveBeenCalledOnce();
+});
+
 it("keeps explicit real authentication distinct from the optional development tour", async () => {
 	const { showOnboardingWindow } = await import("./windows");
 	const onboarding = showOnboardingWindow({ preview: true }) as unknown as FakeWindow;
 	expect(showOnboardingWindow({ preview: false })).toBe(onboarding);
 	expect(onboarding.loadURL).toHaveBeenLastCalledWith(
-		"http://localhost:5173?windowType=onboarding&onboardingPreview=0",
+		process.platform === "darwin" || process.platform === "win32"
+			? "http://localhost:5173?windowType=onboarding&onboardingPreview=0&welcomeSoundtrack=intro"
+			: "http://localhost:5173?windowType=onboarding&onboardingPreview=0",
 	);
 });
 
@@ -238,7 +257,9 @@ it.each([
 	expect(intro.loadURL).toHaveBeenCalledWith(
 		"http://localhost:9999/?windowType=onboarding-intro",
 	);
-	expect(onboarding.loadURL).toHaveBeenCalledWith("http://localhost:9999/?windowType=onboarding");
+	expect(onboarding.loadURL).toHaveBeenCalledWith(
+		"http://localhost:9999/?windowType=onboarding&welcomeSoundtrack=intro",
+	);
 	focusOnboardingWindow();
 	expect(onboarding.show).not.toHaveBeenCalled();
 	intro.webContents.emit("did-finish-load");

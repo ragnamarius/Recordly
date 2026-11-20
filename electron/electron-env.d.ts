@@ -249,6 +249,7 @@ interface Window {
 		hudOverlayDrag: (phase: "start" | "move" | "end", screenX: number, screenY: number) => void;
 		hudOverlayHide: () => void;
 		hudOverlayClose: () => void;
+		onHudOverlayRestored: (callback: () => void) => () => void;
 		getEditorMode: () => Promise<boolean>;
 		onEditorModeChanged: (callback: (inEditor: boolean) => void) => () => void;
 		hudOverlayRendererReady: () => void;
@@ -1043,8 +1044,10 @@ interface Window {
 		showOnboardingWindow: (options?: { preview?: boolean }) => Promise<boolean>;
 		replayOnboardingIntro?: () => Promise<boolean>;
 		closeOnboardingWindow: () => Promise<boolean>;
+		resolveStartupOnboarding: (action: "show" | "continue" | "restart") => Promise<boolean>;
 		reportOnboardingIntro: (stage: "ready" | "finished" | "skipped") => void;
 		onOnboardingIntroShown: (callback: () => void) => () => void;
+		onOnboardingSoundtrackStart: (callback: () => void) => () => void;
 		createProjectFile: (
 			data: unknown,
 			thumbnail?: string | null,

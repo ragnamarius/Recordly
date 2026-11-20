@@ -1,10 +1,10 @@
-import { ErrorReportButton } from "@/components/feedback/ErrorReportButton";
 import { Alert, Button, Description, Modal } from "@heroui/react";
 import { ArrowLeft, X } from "@phosphor-icons/react";
 import type { User } from "@supabase/supabase-js";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { LegalLinks } from "@/components/billing/LegalLinks";
+import { ErrorReportButton } from "@/components/feedback/ErrorReportButton";
 import { SignOut } from "@/components/ui/icons";
 import { RecordlyDemoVideo } from "@/components/ui/RecordlyDemoVideo";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
@@ -13,22 +13,22 @@ import {
 	getEnabledSignInProviders,
 	type RecordlyOAuthProvider,
 	sendSignInCode,
-	verifySignInCode,
 	signInWithEmail,
 	signInWithSocial,
 	signOutRecordly,
+	verifySignInCode,
 } from "@/lib/auth/recordlyAuth";
-import { RecordlySignInFields } from "./RecordlySignInFields";
-import { FirstBootMusic } from "./FirstBootMusic";
 import {
 	OnboardingBody,
 	OnboardingFooter,
 	OnboardingHeader,
-	OnboardingLayout,
 	OnboardingHeroTitle,
+	OnboardingLayout,
 	OnboardingPrimaryAction,
 } from "./OnboardingLayout";
 import { OnboardingPermissions } from "./OnboardingPermissions";
+import { OnboardingSoundtrack } from "./OnboardingSoundtrack";
+import { RecordlySignInFields, SIGN_IN_PROVIDER_CHECK_TIMEOUT_MS } from "./RecordlySignInFields";
 
 const MotionDialog = motion.create(Modal.Dialog);
 
@@ -37,6 +37,7 @@ export type SignInReason = "account" | "share" | "reauthenticate";
 type Props = {
 	variant?: "compact" | "wide";
 	onboarding?: boolean;
+	signInOnly?: boolean;
 	preview?: boolean;
 	startWithPermissions?: boolean;
 	open: boolean;
@@ -48,6 +49,7 @@ type Props = {
 	callbackError?: string;
 	onAuthenticated: () => void;
 	onWindowClose?: () => void;
+	onUnlockSavedSignIn?: () => void;
 	requireSignIn?: boolean;
 };
 
@@ -73,6 +75,7 @@ function friendlyAuthError(
 export function RecordlySignInDialog({
 	variant = "compact",
 	onboarding = false,
+	signInOnly = false,
 	preview = false,
 	startWithPermissions = false,
 	open,
@@ -84,6 +87,7 @@ export function RecordlySignInDialog({
 	callbackError,
 	onAuthenticated,
 	onWindowClose,
+	onUnlockSavedSignIn,
 	requireSignIn = false,
 }: Props) {
 	const { t } = useI18n();
@@ -116,12 +120,13 @@ export function RecordlySignInDialog({
 	]);
 	const awaitingSignIn = useRef(false);
 	const wide = onboarding || variant === "wide";
+	const tour = onboarding && !signInOnly;
 	const [showPermissions, setShowPermissions] = useState(false);
 	const [permissionsReady, setPermissionsReady] = useState(false);
 	const requiresSignIn = ((onboarding && !preview) || requireSignIn) && !user;
 	const opened = useRef(false);
-	const canViewPermissions = Boolean(user) || preview;
-	const permissions = onboarding && canViewPermissions && showPermissions;
+	const canViewPermissions = tour && (Boolean(user) || preview);
+	const permissions = canViewPermissions && showPermissions;
 	const [email, setEmail] = useState("");
 	const consent = { legalAccepted: true };
 
@@ -130,15 +135,15 @@ export function RecordlySignInDialog({
 	const [reportDiagnostic, setReportDiagnostic] = useState<string>();
 	const [linkSent, setLinkSent] = useState(false);
 	const [providers, setProviders] = useState<RecordlyOAuthProvider[]>([]);
-	const [loadingProviders, setLoadingProviders] = useState(false);
 	const [providersKnown, setProvidersKnown] = useState(false);
 
 	useEffect(() => {
-		if (!open || !configured || user) return;
-		let disposed = false;
+		if (!open || !configured || user || onUnlockSavedSignIn) return;
 		const controller = new AbortController();
-		const timeout = window.setTimeout(() => controller.abort(), 10000);
-		setLoadingProviders(true);
+		const timeout = window.setTimeout(
+			() => controller.abort(),
+			SIGN_IN_PROVIDER_CHECK_TIMEOUT_MS,
+		);
 		setProvidersKnown(false);
 		setProviders([]);
 		void getEnabledSignInProviders(controller.signal)
@@ -149,19 +154,17 @@ export function RecordlySignInDialog({
 				}
 			})
 			.catch((error) => {
-				// Email remains available to retry when provider discovery cannot reach Auth.
+				// Allow sign-in attempts when provider availability could not be checked.
 				if (!controller.signal.aborted) captureAuthFailure("provider-discovery", error);
 			})
 			.finally(() => {
 				window.clearTimeout(timeout);
-				if (!disposed) setLoadingProviders(false);
 			});
 		return () => {
-			disposed = true;
 			window.clearTimeout(timeout);
 			controller.abort();
 		};
-	}, [open, configured, user]);
+	}, [open, configured, user, onUnlockSavedSignIn]);
 
 	useEffect(() => {
 		if (open && callbackError) {
@@ -187,16 +190,16 @@ export function RecordlySignInDialog({
 	useEffect(() => {
 		if (!open || opened.current) return;
 		opened.current = true;
-		if (onboarding && user && !preview) setShowPermissions(true);
-	}, [open, onboarding, user, preview]);
+		if (tour && user && !preview) setShowPermissions(true);
+	}, [open, tour, user, preview]);
 
 	useEffect(() => {
-		if (open && startWithPermissions && user) setShowPermissions(true);
-	}, [open, startWithPermissions, user]);
+		if (open && tour && startWithPermissions && user) setShowPermissions(true);
+	}, [open, tour, startWithPermissions, user]);
 
 	useEffect(() => {
 		if (!open) return;
-		if (user && !onboarding) {
+		if (user && !tour) {
 			onAuthenticated();
 			return;
 		}
@@ -205,13 +208,13 @@ export function RecordlySignInDialog({
 			awaitingSignIn.current = false;
 			setMessage(undefined);
 			setReportDiagnostic(undefined);
-			if (onboarding) {
+			if (tour) {
 				// Restoring a cached session must not jump an optional tour away
 				// from its account page. The real flow still advances after sign-in.
 				if (!preview) setShowPermissions(true);
 			} else onAuthenticated();
 		}
-	}, [open, user, onAuthenticated, onboarding, preview]);
+	}, [open, user, onAuthenticated, tour, preview]);
 
 	const run = async (label: SignInAction, action: () => Promise<unknown>) => {
 		setBusy(label);
@@ -297,7 +300,22 @@ export function RecordlySignInDialog({
 							</Modal.Header>
 						)}
 					</motion.div>
-					{user && onboarding ? null : user ? (
+					{onUnlockSavedSignIn ? (
+						<div className="flex flex-col gap-3">
+							<Alert status="warning" role="alert">
+								<Alert.Indicator />
+								<Alert.Content>
+									<Alert.Title>{ot("unlockSavedSignIn")}</Alert.Title>
+									<Alert.Description>
+										{ot("unlockSavedSignInHelp")}
+									</Alert.Description>
+								</Alert.Content>
+							</Alert>
+							<Button className="w-full" onPress={onUnlockSavedSignIn}>
+								{ot("restartToUnlockSignIn")}
+							</Button>
+						</div>
+					) : user && onboarding ? null : user ? (
 						<Button
 							variant="secondary"
 							className="w-full"
@@ -344,14 +362,12 @@ export function RecordlySignInDialog({
 									void run(provider, () => signInWithSocial(provider, consent))
 								}
 								providers={providers}
-								loadingProviders={loadingProviders}
 								providersKnown={providersKnown}
 								configured={configured}
 								busy={busy}
 								compact={onboarding}
 								assetBase={import.meta.env.BASE_URL}
 								labels={{
-									loadingProviders: ot("loadingProviders"),
 									checkInbox: ot("checkInbox"),
 									code: ot("code"),
 									verifyCode: ot("verifyCode"),
@@ -449,6 +465,7 @@ export function RecordlySignInDialog({
 							<OnboardingLayout
 								stage={permissions ? "permissions" : "account"}
 								canViewPermissions={canViewPermissions}
+								showNavigation={!signInOnly}
 								footer={
 									canViewPermissions && (
 										<OnboardingFooter>
@@ -561,7 +578,7 @@ export function RecordlySignInDialog({
 								/>
 							)
 						)}
-						{onboarding && open && <FirstBootMusic />}
+						{tour && open && <OnboardingSoundtrack />}
 					</MotionDialog>
 				</Modal.Container>
 			</Modal.Backdrop>

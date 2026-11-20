@@ -215,6 +215,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	hudOverlayClose: () => {
 		ipcRenderer.send("hud-overlay-close");
 	},
+	onHudOverlayRestored: (callback: () => void) => {
+		const listener = () => callback();
+		ipcRenderer.on("hud-overlay-restored", listener);
+		return () => ipcRenderer.removeListener("hud-overlay-restored", listener);
+	},
 	getEditorMode: () => ipcRenderer.invoke("get-editor-mode"),
 	onEditorModeChanged: (callback: (inEditor: boolean) => void) => {
 		const listener = (_event: Electron.IpcRendererEvent, inEditor: boolean) =>
@@ -561,12 +566,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		? { replayOnboardingIntro: () => ipcRenderer.invoke("replay-onboarding-intro") }
 		: {}),
 	closeOnboardingWindow: () => ipcRenderer.invoke("close-onboarding-window"),
+	resolveStartupOnboarding: (action: "show" | "continue" | "restart") =>
+		ipcRenderer.invoke("resolve-startup-onboarding", action),
 	reportOnboardingIntro: (stage: "ready" | "finished" | "skipped") =>
 		ipcRenderer.send("onboarding-intro", stage),
 	onOnboardingIntroShown: (callback: () => void) => {
 		const listener = () => callback();
 		ipcRenderer.on("onboarding-intro-shown", listener);
 		return () => ipcRenderer.removeListener("onboarding-intro-shown", listener);
+	},
+	onOnboardingSoundtrackStart: (callback: () => void) => {
+		const listener = () => callback();
+		ipcRenderer.on("onboarding-soundtrack-start", listener);
+		ipcRenderer.send("onboarding-soundtrack-ready");
+		return () => ipcRenderer.removeListener("onboarding-soundtrack-start", listener);
 	},
 	createProjectFile: (data: unknown, thumbnail?: string | null) =>
 		ipcRenderer.invoke("create-project-file", data, thumbnail),

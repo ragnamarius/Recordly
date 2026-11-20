@@ -1,7 +1,7 @@
 import { expect, type Page } from "@playwright/test";
-import { productionTest as test } from "./production";
 import { completeSupabaseSignIn } from "./auth";
 import { installDesktopBridge } from "./bridge";
+import { productionTest as test } from "./production";
 
 async function captureSignInReports(page: Page) {
 	const reports: { error: string; logs: string }[] = [];
@@ -85,6 +85,30 @@ test("sign-in keeps all providers visible and marks unavailable providers disabl
 		path: "test-results/onboarding-enabled-providers.png",
 		animations: "disabled",
 	});
+});
+
+test("production onboarding allows OAuth before provider discovery finishes", async ({ page }) => {
+	await installDesktopBridge(page, "preview.mp4", { signedIn: false, onboarded: false });
+	await page.addInitScript(() => {
+		window.electronAPI.openExternalUrl = async (url) => {
+			document.documentElement.dataset.authProvider =
+				new URL(url).searchParams.get("provider") ?? "";
+			return { success: true };
+		};
+	});
+	await page.emulateMedia({ reducedMotion: "reduce" });
+	await page.route("https://auth.recordly.test/auth/v1/settings", () => {
+		// Leave the request pending until the app's timeout aborts it.
+	});
+	const discovery = page.waitForRequest("https://auth.recordly.test/auth/v1/settings");
+	await page.goto("/?windowType=onboarding");
+	await discovery;
+	const login = page.getByRole("dialog", { name: "Welcome to Recordly" });
+	const google = login.getByRole("button", { name: "Continue with Google" });
+
+	await google.click({ timeout: 3_500 });
+	await expect(page.locator("html")).toHaveAttribute("data-auth-provider", "google");
+	await expect(login.getByRole("button", { name: "Permissions", exact: true })).toBeDisabled();
 });
 
 test("email sign-in reports localized failures and allows retry without granting access", async ({
